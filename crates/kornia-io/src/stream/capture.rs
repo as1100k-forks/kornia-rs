@@ -1,9 +1,13 @@
 use crate::stream::error::StreamCaptureError;
 use circular_buffer::CircularBuffer;
-use gstreamer::prelude::*;
+use gstreamer::{prelude::*, MappedBuffer};
 use kornia_image::Image;
-use kornia_tensor::{CpuAllocator, Tensor};
-use std::sync::{Arc, Mutex};
+use kornia_tensor::{storage::TensorStorage, CpuAllocator, Tensor, TensorError};
+use std::{
+    alloc::Layout,
+    ptr::NonNull,
+    sync::{Arc, Mutex},
+};
 
 // utility struct to store the frame buffer
 struct FrameBuffer {
@@ -93,7 +97,7 @@ impl StreamCapture {
         if let Some(frame_buffer) = circular_buffer.pop_front() {
             let buffer = frame_buffer
                 .buffer
-                .map_readable()
+                .into_mapped_buffer_readable()
                 .map_err(|_| StreamCaptureError::GetBufferError)?;
 
             let tensor = Tensor::from_shape_slice(
@@ -172,4 +176,46 @@ impl Drop for StreamCapture {
     fn drop(&mut self) {
         self.close().expect("Failed to close StreamCapture");
     }
+}
+
+fn tensor_from_mapped_buffer(
+    shape: [usize; 3],
+    value: MappedBuffer<gstreamer::memory::Readable>,
+) -> Result<Tensor<u8, 3, CpuAllocator>, TensorError> {
+    let numel = shape.iter().product::<usize>();
+    if numel != value.len() {
+        return Err(TensorError::InvalidShape(numel));
+    }
+
+    let storage = tensor_storage_from_mapped_buffer(value);
+    let strides = get_strides_from_shape(shape);
+
+    Ok(Tensor {
+        storage,
+        shape,
+        strides,
+    })
+}
+
+fn tensor_storage_from_mapped_buffer(
+    value: MappedBuffer<gstreamer::memory::Readable>,
+) -> TensorStorage<u8, CpuAllocator> {
+    let ptr = unsafe { NonNull::new_unchecked(value.as_ptr() as _) };
+    let len = value.len() * std::mem::size_of::<MappedBuffer<gstreamer::memory::Readable>>();
+    let layout = unsafe {
+        Layout::array::<MappedBuffer<gstreamer::memory::Readable>>(value.len()).unwrap_unchecked()
+    };
+    std::mem::forget(value);
+
+    TensorStorage::new(ptr, len, layout, CpuAllocator)
+}
+
+fn get_strides_from_shape<const N: usize>(shape: [usize; N]) -> [usize; N] {
+    let mut strides: [usize; N] = [0; N];
+    let mut stride = 1;
+    for i in (0..shape.len()).rev() {
+        strides[i] = stride;
+        stride *= shape[i];
+    }
+    strides
 }
