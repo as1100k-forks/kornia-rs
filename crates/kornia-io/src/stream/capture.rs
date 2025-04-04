@@ -1,9 +1,15 @@
 use crate::stream::error::StreamCaptureError;
 use circular_buffer::CircularBuffer;
-use gstreamer::prelude::*;
+use gstreamer::{prelude::*, Buffer};
 use kornia_image::Image;
-use kornia_tensor::{CpuAllocator, Tensor};
-use std::sync::{Arc, Mutex};
+use kornia_tensor::{
+    allocator::TensorAllocatorError, storage::TensorStorage, tensor::get_strides_from_shape,
+    CpuAllocator, Tensor, TensorAllocator,
+};
+use std::{
+    alloc::{self, Layout},
+    sync::{Arc, Mutex},
+};
 
 // utility struct to store the frame buffer
 struct FrameBuffer {
@@ -17,6 +23,31 @@ pub struct StreamCapture {
     pipeline: gstreamer::Pipeline,
     circular_buffer: Arc<Mutex<CircularBuffer<5, FrameBuffer>>>,
 }
+
+/// TODO
+#[derive(Clone, Default)]
+pub struct GstAllocator;
+
+impl TensorAllocator for GstAllocator {
+    fn alloc(
+        &self,
+        layout: Layout,
+    ) -> Result<*mut u8, kornia_tensor::allocator::TensorAllocatorError> {
+        let ptr = unsafe { alloc::alloc(layout) };
+        if ptr.is_null() {
+            Err(TensorAllocatorError::NullPointer)?
+        }
+        Ok(ptr)
+    }
+
+    fn dealloc(&self, _ptr: *mut u8, _layout: Layout) {
+        // TODO Nothing
+    }
+}
+
+/// TODO
+#[allow(dead_code)]
+pub struct StreamImage(pub Tensor<u8, 3, GstAllocator>, Buffer);
 
 impl StreamCapture {
     /// Creates a new StreamCapture instance with the given pipeline description.
@@ -85,26 +116,40 @@ impl StreamCapture {
     /// # Returns
     ///
     /// An Option containing the last captured Image or None if no image has been captured yet.
-    pub fn grab(&mut self) -> Result<Option<Image<u8, 3>>, StreamCaptureError> {
+    pub fn grab(&mut self) -> Result<Option<StreamImage>, StreamCaptureError> {
         let mut circular_buffer = self
             .circular_buffer
             .lock()
             .map_err(|_| StreamCaptureError::MutexPoisonError)?;
         if let Some(frame_buffer) = circular_buffer.pop_front() {
-            let buffer = frame_buffer
-                .buffer
+            let buffer = frame_buffer.buffer;
+            let buffer_map = buffer
                 .map_readable()
                 .map_err(|_| StreamCaptureError::GetBufferError)?;
 
-            let tensor = Tensor::from_shape_slice(
-                [frame_buffer.width as usize, frame_buffer.height as usize, 3],
-                buffer.as_slice(),
-                CpuAllocator,
-            )
-            .map_err(|_| StreamCaptureError::CreateImageFrameError)?;
+            let slice = buffer_map.as_slice();
+            let ptr = slice.as_ptr();
+            let layout = unsafe { Layout::array::<u8>(slice.len()).unwrap_unchecked() };
+            println!("{:?}", ptr);
 
-            let img = Image::<u8, 3>(tensor);
-            return Ok(Some(img));
+            let tensor_storage =
+                unsafe { TensorStorage::new(slice.as_ptr(), slice.len(), layout, GstAllocator) };
+
+            let shape = [frame_buffer.width as usize, frame_buffer.height as usize, 3];
+            let strides = get_strides_from_shape(shape);
+            let tensor = Tensor {
+                shape,
+                strides,
+                storage: tensor_storage,
+            };
+            // let image: Image<u8, 3> = Image(tensor);
+
+            // println!("Going to drop buffer_map");
+            drop(buffer_map);
+            // println!("Droped buffer_map");
+            let stream_image = StreamImage(tensor, buffer);
+            // let img = Image::<u8, 3>(tensor);
+            return Ok(Some(stream_image));
         }
         Ok(None)
     }
