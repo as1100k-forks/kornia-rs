@@ -130,7 +130,7 @@ impl StreamCapture {
             let slice = buffer_map.as_slice();
             let ptr = slice.as_ptr();
             let layout = unsafe { Layout::array::<u8>(slice.len()).unwrap_unchecked() };
-            println!("{:?}", ptr);
+            // println!("{:?}", ptr);
 
             let tensor_storage =
                 unsafe { TensorStorage::new(slice.as_ptr(), slice.len(), layout, GstAllocator) };

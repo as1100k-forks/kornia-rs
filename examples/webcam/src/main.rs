@@ -42,7 +42,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             height: 480,
         })
         .build()?;
-
     // start the background pipeline
     webcam.start()?;
 
@@ -79,30 +78,38 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     // preallocate images
-    let mut img_resized = Image::from_size_val(new_size, 0u8)?;
-    let mut img_f32 = Image::from_size_val(new_size, 0f32)?;
-    let mut gray = Image::from_size_val(new_size, 0f32)?;
-    let mut bin = Image::from_size_val(new_size, 0f32)?;
+    // let mut img_resized = Image::from_size_val(new_size, 0u8)?;
+    // let mut img_f32 = Image::from_size_val(new_size, 0f32)?;
+    // let mut gray = Image::from_size_val(new_size, 0f32)?;
+    // let mut bin = Image::from_size_val(new_size, 0f32)?;
 
     // start grabbing frames from the camera
     while !cancel_token.load(Ordering::SeqCst) {
         let Some(img) = webcam.grab()? else {
             continue;
         };
+        let size = [img.0.shape[0] as u32, img.0.shape[1] as u32];
+        // let img = Image::new(
+        //     ImageSize {
+        //         width: img.0.shape[0],
+        //         height: img.0.shape[1],
+        //     },
+        //     img.0.as_slice().to_vec(),
+        // )?;
 
-        // lets resize the image to 256x256
-        imgproc::resize::resize_fast(
-            &img,
-            &mut img_resized,
-            imgproc::interpolation::InterpolationMode::Bilinear,
-        )?;
+        // // lets resize the image to 256x256
+        // imgproc::resize::resize_fast(
+        //     &img,
+        //     &mut img_resized,
+        //     imgproc::interpolation::InterpolationMode::Bilinear,
+        // )?;
 
-        // convert the image to f32 and normalize before processing
-        ops::cast_and_scale(&img_resized, &mut img_f32, 1. / 255.)?;
+        // // convert the image to f32 and normalize before processing
+        // ops::cast_and_scale(&img_resized, &mut img_f32, 1. / 255.)?;
 
-        // convert the image to grayscale and binarize
-        imgproc::color::gray_from_rgb(&img_f32, &mut gray)?;
-        imgproc::threshold::threshold_binary(&gray, &mut bin, 0.35, 0.65)?;
+        // // convert the image to grayscale and binarize
+        // imgproc::color::gray_from_rgb(&img_f32, &mut gray)?;
+        // imgproc::threshold::threshold_binary(&gray, &mut bin, 0.35, 0.65)?;
 
         // update the fps counter
         fps_counter.update();
@@ -110,14 +117,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // log the image
         rec.log_static(
             "image",
-            &rerun::Image::from_elements(img.as_slice(), img.size().into(), rerun::ColorModel::RGB),
+            &rerun::Image::from_elements(img.0.as_slice(), size, rerun::ColorModel::RGB),
         )?;
 
         // log the binary image
-        rec.log_static(
-            "binary",
-            &rerun::Image::from_elements(bin.as_slice(), bin.size().into(), rerun::ColorModel::L),
-        )?;
+        // rec.log_static(
+        //     "binary",
+        //     &rerun::Image::from_elements(bin.as_slice(), bin.size().into(), rerun::ColorModel::L),
+        // )?;
     }
 
     // NOTE: this is important to close the webcam properly, otherwise the app will hang
