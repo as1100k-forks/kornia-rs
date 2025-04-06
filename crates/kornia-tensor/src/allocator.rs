@@ -1,5 +1,4 @@
 use crate::ParentDeallocator;
-use auto_impl::auto_impl;
 use std::alloc;
 use std::alloc::Layout;
 use thiserror::Error;
@@ -26,7 +25,6 @@ pub enum TensorAllocatorError {
 ///
 /// * `alloc` - Allocates memory for a tensor with the given layout.
 /// * `dealloc` - Deallocates memory for a tensor with the given layout.
-#[auto_impl(&mut, Box)]
 pub trait TensorAllocator: Clone {
     /// Allocates memory for a tensor with the given layout.
     fn alloc(&self, layout: Layout) -> Result<*mut u8, TensorAllocatorError>;

@@ -1,5 +1,3 @@
-use auto_impl::auto_impl;
-
 /// A trait for deallocating memory of parent for tensor.
 ///
 /// # Safety
@@ -17,8 +15,19 @@ use auto_impl::auto_impl;
 ///
 /// Refer: [`TensorStorage`](super::TensorStorage), [PR #338](https://github.com/kornia/kornia-rs/pull/338)
 /// for more info
-#[auto_impl(&mut, Box)]
 pub trait ParentDeallocator {
     /// Deallocates the parent.
     fn dealloc(&mut self);
+}
+
+impl<T: ?Sized + ParentDeallocator> ParentDeallocator for &mut T {
+    fn dealloc(&mut self) {
+        (**self).dealloc();
+    }
+}
+
+impl<T: ?Sized + ParentDeallocator> ParentDeallocator for Box<T> {
+    fn dealloc(&mut self) {
+        (**self).dealloc();
+    }
 }

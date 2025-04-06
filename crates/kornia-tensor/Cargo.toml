@@ -16,8 +16,6 @@ num-traits = { workspace = true }
 serde = { workspace = true, optional = true }
 bincode = { workspace = true, optional = true }
 thiserror = { workspace = true }
-auto_impl = "1.2"
-
 [features]
 serde = ["dep:serde"]
 bincode = ["dep:bincode"]
