@@ -1,12 +1,24 @@
-use super::{FrameImage, GstAllocator};
 use crate::stream::error::StreamCaptureError;
 use circular_buffer::CircularBuffer;
 use gstreamer::prelude::*;
-use kornia_tensor::{storage::TensorStorage, tensor::get_strides_from_shape, Tensor};
+use kornia_image::Image;
+use kornia_tensor::{
+    storage::TensorStorage, tensor::get_strides_from_shape, ParentDeallocator, Tensor,
+};
 use std::{
     alloc::Layout,
     sync::{Arc, Mutex},
 };
+
+#[allow(dead_code)]
+pub(crate) struct GstParentDeallocator(gstreamer::Buffer);
+
+impl ParentDeallocator for GstParentDeallocator {
+    fn dealloc(&mut self, _parent_ptr: Option<*mut ()>) {
+        // When gstreamer::Buffer will be dropped, it will automatically
+        // reduce the reference count as this memory is managed by gstreamer
+    }
+}
 
 // utility struct to store the frame buffer
 struct FrameBuffer {
@@ -88,14 +100,18 @@ impl StreamCapture {
     /// # Returns
     ///
     /// An Option containing the last captured Image or None if no image has been captured yet.
-    pub fn grab(&mut self) -> Result<Option<FrameImage>, StreamCaptureError> {
+    pub fn grab(&mut self) -> Result<Option<Image<u8, 3>>, StreamCaptureError> {
         let mut circular_buffer = self
             .circular_buffer
             .lock()
             .map_err(|_| StreamCaptureError::MutexPoisonError)?;
         if let Some(frame_buffer) = circular_buffer.pop_front() {
-            let buffer = frame_buffer.buffer;
-            let buffer_map = buffer
+            let width = frame_buffer.width as usize;
+            let height = frame_buffer.height as usize;
+
+            // Create a mapping of the buffer without moving it out of frame_buffer
+            let buffer_map = frame_buffer
+                .buffer
                 .map_readable()
                 .map_err(|_| StreamCaptureError::GetBufferError)?;
 
@@ -103,24 +119,34 @@ impl StreamCapture {
             let frame_data_ptr = frame_data_slice.as_ptr();
 
             let layout = unsafe { Layout::array::<u8>(frame_data_slice.len()).unwrap_unchecked() };
-            let tensor_storage = unsafe {
-                TensorStorage::new(frame_data_ptr, frame_data_slice.len(), layout, GstAllocator)
-            };
 
-            let shape = [frame_buffer.height as usize, frame_buffer.width as usize, 3];
+            let length = frame_data_slice.len();
+            let shape = [height, width, 3];
             let strides = get_strides_from_shape(shape);
-            let tensor = Tensor {
-                shape,
-                strides,
-                storage: tensor_storage,
-            };
 
-            // buffer_map is the reference to buffer, dropping it allows
-            // the ownership of buffer to be transfered to FrameImage
+            // Drop the buffer_map as it is a reference of Buffer
             drop(buffer_map);
 
-            let frame_image = FrameImage(tensor, buffer);
-            return Ok(Some(frame_image));
+            let gst_parent_deallocator = GstParentDeallocator(frame_buffer.buffer);
+
+            let tensor = unsafe {
+                Tensor {
+                    shape,
+                    strides,
+                    storage: TensorStorage::with_parent_relation(
+                        frame_data_ptr,
+                        (
+                            None,
+                            Box::new(gst_parent_deallocator) as Box<dyn ParentDeallocator>,
+                        ),
+                        length,
+                        layout,
+                    ),
+                }
+            };
+
+            let image = Image(tensor);
+            return Ok(Some(image));
         }
         Ok(None)
     }
