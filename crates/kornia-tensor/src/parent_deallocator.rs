@@ -20,5 +20,5 @@ use auto_impl::auto_impl;
 #[auto_impl(&mut, Box)]
 pub trait ParentDeallocator {
     /// Deallocates the parent.
-    fn dealloc(&mut self, parent_ptr: Option<*mut ()>);
+    fn dealloc(&mut self);
 }

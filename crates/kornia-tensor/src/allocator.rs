@@ -35,7 +35,7 @@ pub trait TensorAllocator: Clone {
     fn dealloc<PD: ParentDeallocator>(
         &self,
         ptr: *mut u8,
-        parent_ptr: Option<(Option<*mut ()>, PD)>,
+        parent_ptr: Option<&mut PD>,
         layout: Layout,
     );
 }
@@ -84,13 +84,11 @@ impl TensorAllocator for CpuAllocator {
     fn dealloc<PD: ParentDeallocator>(
         &self,
         ptr: *mut u8,
-        parent_ptr: Option<(Option<*mut ()>, PD)>,
+        parent: Option<&mut PD>,
         layout: Layout,
     ) {
-        if let Some((parent_ptr, mut parent_deallocator)) = parent_ptr {
-            if !ptr.is_null() {
-                parent_deallocator.dealloc(parent_ptr);
-            }
+        if let Some(parent) = parent {
+            parent.dealloc();
         } else {
             if !ptr.is_null() {
                 unsafe {
@@ -109,7 +107,7 @@ mod tests {
     struct DefaultParentDeallocator;
 
     impl ParentDeallocator for DefaultParentDeallocator {
-        fn dealloc(&mut self, _parent_ptr: Option<*mut ()>) {
+        fn dealloc(&mut self) {
             // Do nothing, just a placeholder type
         }
     }

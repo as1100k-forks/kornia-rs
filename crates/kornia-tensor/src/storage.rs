@@ -12,7 +12,7 @@ pub struct TensorStorage<T, A: TensorAllocator, PD: ParentDeallocator> {
     ///
     /// **NOTE:** There are no guarantees made, you should know what you are
     /// doing if you plan to use it, as it violates rust memory safety rule.
-    pub(crate) parent_ptr: Option<(Option<NonNull<()>>, PD)>,
+    pub(crate) parent: Option<PD>,
     /// The length of the tensor memory in bytes.
     pub(crate) len: usize,
     /// The layout of the tensor memory.
@@ -86,7 +86,7 @@ impl<T, A: TensorAllocator, PD: ParentDeallocator> TensorStorage<T, A, PD> {
 
         Self {
             ptr,
-            parent_ptr: None,
+            parent: None,
             len,
             layout,
             alloc,
@@ -103,7 +103,7 @@ impl<T, A: TensorAllocator, PD: ParentDeallocator> TensorStorage<T, A, PD> {
         let layout = Layout::from_size_align_unchecked(len, std::mem::size_of::<T>());
         Self {
             ptr,
-            parent_ptr: None,
+            parent: None,
             len,
             layout,
             alloc,
@@ -150,20 +150,15 @@ impl<T, PD: ParentDeallocator> TensorStorage<T, CpuAllocator, PD> {
     /// Refer [PR #338](https://github.com/kornia/kornia-rs/pull/338) for more info.
     pub unsafe fn with_parent_relation(
         ptr: *const T,
-        parent: (Option<*const ()>, PD),
+        parent: PD,
         len: usize,
         layout: Layout,
     ) -> Self {
         let ptr = NonNull::new_unchecked(ptr as _);
-        let parent_ptr = if let Some(parent_ptr) = parent.0 {
-            Some(NonNull::new_unchecked(parent_ptr as _))
-        } else {
-            None
-        };
 
         Self {
             ptr,
-            parent_ptr: Some((parent_ptr, parent.1)),
+            parent: Some(parent),
             len,
             layout,
             alloc: CpuAllocator,
@@ -179,12 +174,7 @@ unsafe impl<T, A: TensorAllocator, PD: ParentDeallocator> Sync for TensorStorage
 impl<T, A: TensorAllocator, PD: ParentDeallocator> Drop for TensorStorage<T, A, PD> {
     fn drop(&mut self) {
         let ptr = self.ptr.as_ptr() as *mut u8;
-        let parent_ptr = self
-            .parent_ptr
-            .as_mut()
-            .map(|(p, d)| (p.map(|p| p.as_ptr()), d));
-
-        self.alloc.dealloc(ptr, parent_ptr, self.layout);
+        self.alloc.dealloc(ptr, self.parent.as_mut(), self.layout);
     }
 }
 /// A new `TensorStorage` instance with cloned data if successful, otherwise an error.
@@ -220,7 +210,7 @@ mod tests {
     struct DefaultParentDeallocator;
 
     impl ParentDeallocator for DefaultParentDeallocator {
-        fn dealloc(&mut self, _parent_ptr: Option<*mut ()>) {
+        fn dealloc(&mut self) {
             // Do nothing, just a placeholder type
         }
     }
@@ -236,7 +226,7 @@ mod tests {
 
         let buffer: TensorStorage<_, _, DefaultParentDeallocator> = TensorStorage {
             alloc: allocator,
-            parent_ptr: None,
+            parent: None,
             len: size * std::mem::size_of::<u8>(),
             layout,
             ptr,
@@ -281,7 +271,7 @@ mod tests {
             len: size,
             layout,
             ptr: ptr.cast::<f32>(),
-            parent_ptr: None,
+            parent: None,
         };
 
         assert_eq!(buffer.as_ptr(), ptr.as_ptr() as *const f32);
@@ -307,7 +297,7 @@ mod tests {
             fn dealloc<PD: ParentDeallocator>(
                 &self,
                 ptr: *mut u8,
-                parent_ptr: Option<(Option<*mut ()>, PD)>,
+                parent_ptr: Option<&mut PD>,
                 layout: Layout,
             ) {
                 *self.bytes_allocated.borrow_mut() -= layout.size() as i32;

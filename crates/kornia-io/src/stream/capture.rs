@@ -14,7 +14,7 @@ use std::{
 pub(crate) struct GstParentDeallocator(gstreamer::Buffer);
 
 impl ParentDeallocator for GstParentDeallocator {
-    fn dealloc(&mut self, _parent_ptr: Option<*mut ()>) {
+    fn dealloc(&mut self) {
         // When gstreamer::Buffer will be dropped, it will automatically
         // reduce the reference count as this memory is managed by gstreamer
     }
@@ -135,10 +135,7 @@ impl StreamCapture {
                     strides,
                     storage: TensorStorage::with_parent_relation(
                         frame_data_ptr,
-                        (
-                            None,
-                            Box::new(gst_parent_deallocator) as Box<dyn ParentDeallocator>,
-                        ),
+                        Box::new(gst_parent_deallocator) as Box<dyn ParentDeallocator>,
                         length,
                         layout,
                     ),
