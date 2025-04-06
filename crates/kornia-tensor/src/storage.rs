@@ -140,9 +140,9 @@ impl<T, PD: ParentDeallocator> TensorStorage<T, CpuAllocator, PD> {
     /// not drop the child _(reference)_, but instead use a different deallocator
     /// marked with [ParentDeallocator].
     ///
-    /// # NOTE
-    /// If you are using this, then you are not safed by any Rust runtime guarantees,
-    /// and you need to implement your own logic on how the parent will live long
+    /// # Safety
+    /// The use of this function bypasses rust memeory safety guarantees and
+    /// you need to implement your own logic on how the parent will live long
     /// enough and deallocated.
     ///
     /// **Only use this, if you know what you are doing.**

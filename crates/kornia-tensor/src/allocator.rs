@@ -87,11 +87,9 @@ impl TensorAllocator for CpuAllocator {
     ) {
         if let Some(parent) = parent {
             parent.dealloc();
-        } else {
-            if !ptr.is_null() {
-                unsafe {
-                    alloc::dealloc(ptr, layout);
-                }
+        } else if !ptr.is_null() {
+            unsafe {
+                alloc::dealloc(ptr, layout);
             }
         }
     }
