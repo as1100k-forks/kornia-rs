@@ -3,18 +3,15 @@ use circular_buffer::CircularBuffer;
 use gstreamer::prelude::*;
 use kornia_image::Image;
 use kornia_tensor::{
-    storage::TensorStorage, tensor::get_strides_from_shape, ParentDeallocator, Tensor,
+    storage::TensorStorage, tensor::get_strides_from_shape, CpuAllocator, ParentDeallocator, Tensor,
 };
-use std::{
-    alloc::Layout,
-    sync::{Arc, Mutex},
-};
+use std::sync::{Arc, Mutex};
 
 #[allow(dead_code)]
 pub(crate) struct GstParentDeallocator(gstreamer::Buffer);
 
 impl ParentDeallocator for GstParentDeallocator {
-    fn dealloc(&mut self) {
+    fn dealloc(&self) {
         // When gstreamer::Buffer will be dropped, it will automatically
         // reduce the reference count as this memory is managed by gstreamer
     }
@@ -118,8 +115,6 @@ impl StreamCapture {
             let frame_data_slice = buffer_map.as_slice();
             let frame_data_ptr = frame_data_slice.as_ptr();
 
-            let layout = unsafe { Layout::array::<u8>(frame_data_slice.len()).unwrap_unchecked() };
-
             let length = frame_data_slice.len();
             let shape = [height, width, 3];
             let strides = get_strides_from_shape(shape);
@@ -127,17 +122,16 @@ impl StreamCapture {
             // Drop the buffer_map as it is a reference of Buffer
             drop(buffer_map);
 
-            let gst_parent_deallocator = GstParentDeallocator(frame_buffer.buffer);
+            let gst_parent_deallocator = Arc::new(GstParentDeallocator(frame_buffer.buffer));
 
             let tensor = unsafe {
                 Tensor {
                     shape,
                     strides,
-                    storage: TensorStorage::with_parent_relation(
+                    storage: TensorStorage::from_raw_parts(
                         frame_data_ptr,
-                        Box::new(gst_parent_deallocator) as Box<dyn ParentDeallocator>,
                         length,
-                        layout,
+                        CpuAllocator::with_parent_relation(gst_parent_deallocator),
                     ),
                 }
             };

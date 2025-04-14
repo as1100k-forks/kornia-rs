@@ -1,18 +1,10 @@
-use crate::{allocator::TensorAllocator, CpuAllocator, ParentDeallocator};
+use crate::allocator::TensorAllocator;
 use std::{alloc::Layout, ptr::NonNull};
 
 /// Definition of the buffer for a tensor.
-pub struct TensorStorage<T, A: TensorAllocator, PD: ParentDeallocator> {
+pub struct TensorStorage<T, A: TensorAllocator> {
     /// The pointer to the tensor memory which must be non null.
     pub(crate) ptr: NonNull<T>,
-    /// Represents the parent relationship for this tensor storage, if any.
-    /// When a tensor is a view or slice of another type, this field stores:
-    /// - An optional pointer to the parent tensor's memory
-    /// - A deallocator that knows how to handle the parent memory deallocation
-    ///
-    /// **NOTE:** There are no guarantees made, you should know what you are
-    /// doing if you plan to use it, as it violates rust memory safety rule.
-    pub(crate) parent: Option<PD>,
     /// The length of the tensor memory in bytes.
     pub(crate) len: usize,
     /// The layout of the tensor memory.
@@ -21,7 +13,7 @@ pub struct TensorStorage<T, A: TensorAllocator, PD: ParentDeallocator> {
     pub(crate) alloc: A,
 }
 
-impl<T, A: TensorAllocator, PD: ParentDeallocator> TensorStorage<T, A, PD> {
+impl<T, A: TensorAllocator> TensorStorage<T, A> {
     /// Returns the pointer to the tensor memory.
     #[inline]
     pub fn as_ptr(&self) -> *const T {
@@ -86,7 +78,6 @@ impl<T, A: TensorAllocator, PD: ParentDeallocator> TensorStorage<T, A, PD> {
 
         Self {
             ptr,
-            parent: None,
             len,
             layout,
             alloc,
@@ -103,7 +94,6 @@ impl<T, A: TensorAllocator, PD: ParentDeallocator> TensorStorage<T, A, PD> {
         let layout = Layout::from_size_align_unchecked(len, std::mem::size_of::<T>());
         Self {
             ptr,
-            parent: None,
             len,
             layout,
             alloc,
@@ -133,56 +123,23 @@ impl<T, A: TensorAllocator, PD: ParentDeallocator> TensorStorage<T, A, PD> {
     }
 }
 
-impl<T, PD: ParentDeallocator> TensorStorage<T, CpuAllocator, PD> {
-    /// Creates a new TensorStorage with a parent relation. The parent relation allows
-    /// you to store a slice that is a reference to the parent. For this, the parent
-    /// needs to live long enough. When using this function the [CpuAllocator] will
-    /// not drop the child _(reference)_, but instead use a different deallocator
-    /// marked with [ParentDeallocator].
-    ///
-    /// # Safety
-    /// The use of this function bypasses rust memeory safety guarantees and
-    /// you need to implement your own logic on how the parent will live long
-    /// enough and deallocated.
-    ///
-    /// **Only use this, if you know what you are doing.**
-    ///
-    /// Refer [PR #338](https://github.com/kornia/kornia-rs/pull/338) for more info.
-    pub unsafe fn with_parent_relation(
-        ptr: *const T,
-        parent: PD,
-        len: usize,
-        layout: Layout,
-    ) -> Self {
-        let ptr = NonNull::new_unchecked(ptr as _);
-
-        Self {
-            ptr,
-            parent: Some(parent),
-            len,
-            layout,
-            alloc: CpuAllocator,
-        }
-    }
-}
-
 // Safety:
 // TensorStorage is thread safe if the allocator is thread safe.
-unsafe impl<T, A: TensorAllocator, PD: ParentDeallocator> Send for TensorStorage<T, A, PD> {}
-unsafe impl<T, A: TensorAllocator, PD: ParentDeallocator> Sync for TensorStorage<T, A, PD> {}
+unsafe impl<T, A: TensorAllocator> Send for TensorStorage<T, A> {}
+unsafe impl<T, A: TensorAllocator> Sync for TensorStorage<T, A> {}
 
-impl<T, A: TensorAllocator, PD: ParentDeallocator> Drop for TensorStorage<T, A, PD> {
+impl<T, A: TensorAllocator> Drop for TensorStorage<T, A> {
     fn drop(&mut self) {
         let ptr = self.ptr.as_ptr() as *mut u8;
-        self.alloc.dealloc(ptr, self.parent.as_mut(), self.layout);
+        self.alloc.dealloc(ptr, self.layout);
     }
 }
+
 /// A new `TensorStorage` instance with cloned data if successful, otherwise an error.
-impl<T, A, PD> Clone for TensorStorage<T, A, PD>
+impl<T, A> Clone for TensorStorage<T, A>
 where
     T: Clone,
     A: TensorAllocator + 'static,
-    PD: ParentDeallocator,
 {
     fn clone(&self) -> Self {
         let mut new_vec = Vec::<T>::with_capacity(self.len());
@@ -206,27 +163,17 @@ mod tests {
     use std::ptr::NonNull;
     use std::rc::Rc;
 
-    #[derive(Clone, Copy, Debug)]
-    struct DefaultParentDeallocator;
-
-    impl ParentDeallocator for DefaultParentDeallocator {
-        fn dealloc(&mut self) {
-            // Do nothing, just a placeholder type
-        }
-    }
-
     #[test]
     fn test_tensor_buffer_create_raw() -> Result<(), TensorAllocatorError> {
         let size = 8;
-        let allocator = CpuAllocator;
+        let allocator = CpuAllocator::default();
         let layout = Layout::array::<u8>(size).map_err(TensorAllocatorError::LayoutError)?;
         let ptr =
             NonNull::new(allocator.alloc(layout)?).ok_or(TensorAllocatorError::NullPointer)?;
         let ptr_raw = ptr.as_ptr();
 
-        let buffer: TensorStorage<_, _, DefaultParentDeallocator> = TensorStorage {
+        let buffer: TensorStorage<_, _> = TensorStorage {
             alloc: allocator,
-            parent: None,
             len: size * std::mem::size_of::<u8>(),
             layout,
             ptr,
@@ -245,7 +192,7 @@ mod tests {
     #[test]
     fn test_tensor_buffer_ptr() -> Result<(), TensorAllocatorError> {
         let size = 8;
-        let allocator = CpuAllocator;
+        let allocator = CpuAllocator::default();
         let layout = Layout::array::<u8>(size).map_err(TensorAllocatorError::LayoutError)?;
         let ptr =
             NonNull::new(allocator.alloc(layout)?).ok_or(TensorAllocatorError::NullPointer)?;
@@ -261,17 +208,16 @@ mod tests {
     #[test]
     fn test_tensor_buffer_create_f32() -> Result<(), TensorAllocatorError> {
         let size = 8;
-        let allocator = CpuAllocator;
+        let allocator = CpuAllocator::default();
         let layout = Layout::array::<f32>(size).map_err(TensorAllocatorError::LayoutError)?;
         let ptr =
             NonNull::new(allocator.alloc(layout)?).ok_or(TensorAllocatorError::NullPointer)?;
 
-        let buffer: TensorStorage<_, _, DefaultParentDeallocator> = TensorStorage {
+        let buffer: TensorStorage<_, _> = TensorStorage {
             alloc: allocator,
             len: size,
             layout,
             ptr: ptr.cast::<f32>(),
-            parent: None,
         };
 
         assert_eq!(buffer.as_ptr(), ptr.as_ptr() as *const f32);
@@ -292,16 +238,11 @@ mod tests {
         impl TensorAllocator for TestAllocator {
             fn alloc(&self, layout: Layout) -> Result<*mut u8, TensorAllocatorError> {
                 *self.bytes_allocated.borrow_mut() += layout.size() as i32;
-                CpuAllocator.alloc(layout)
+                CpuAllocator::default().alloc(layout)
             }
-            fn dealloc<PD: ParentDeallocator>(
-                &self,
-                ptr: *mut u8,
-                parent_ptr: Option<&mut PD>,
-                layout: Layout,
-            ) {
+            fn dealloc(&self, ptr: *mut u8, layout: Layout) {
                 *self.bytes_allocated.borrow_mut() -= layout.size() as i32;
-                CpuAllocator.dealloc(ptr, parent_ptr, layout);
+                CpuAllocator::default().dealloc(ptr, layout);
             }
         }
 
@@ -320,8 +261,7 @@ mod tests {
             let vec_ptr = vec.as_ptr();
             let vec_capacity = vec.capacity();
 
-            let buffer: TensorStorage<_, _, DefaultParentDeallocator> =
-                TensorStorage::from_vec(vec, allocator.clone());
+            let buffer: TensorStorage<_, _> = TensorStorage::from_vec(vec, allocator.clone());
             assert_eq!(*allocator.bytes_allocated.borrow(), 0);
 
             let result_vec = buffer.into_vec();
@@ -341,8 +281,7 @@ mod tests {
         let vec_ptr = vec.as_ptr();
         let vec_len = vec.len();
 
-        let buffer =
-            TensorStorage::<_, CpuAllocator, DefaultParentDeallocator>::from_vec(vec, CpuAllocator);
+        let buffer = TensorStorage::<_, CpuAllocator>::from_vec(vec, CpuAllocator::default());
 
         // check NO copy
         let buffer_ptr = buffer.as_ptr();
@@ -386,8 +325,7 @@ mod tests {
         let vec_ptr = vec.as_ptr();
         let vec_cap = vec.capacity();
 
-        let buffer =
-            TensorStorage::<_, CpuAllocator, DefaultParentDeallocator>::from_vec(vec, CpuAllocator);
+        let buffer = TensorStorage::<_, CpuAllocator>::from_vec(vec, CpuAllocator::default());
 
         // convert back to vec
         let result_vec = buffer.into_vec();
@@ -402,13 +340,63 @@ mod tests {
     #[test]
     fn test_tensor_mutability() -> Result<(), TensorAllocatorError> {
         let vec: Vec<i32> = vec![1, 2, 3, 4, 5];
-        let mut buffer =
-            TensorStorage::<_, CpuAllocator, DefaultParentDeallocator>::from_vec(vec, CpuAllocator);
+        let mut buffer = TensorStorage::<_, CpuAllocator>::from_vec(vec, CpuAllocator::default());
         let ptr_mut = buffer.as_mut_ptr();
         unsafe {
             *ptr_mut.add(0) = 10;
         }
         assert_eq!(buffer.into_vec(), vec![10, 2, 3, 4, 5]);
+        Ok(())
+    }
+
+    #[test]
+    fn test_parent_deallocator() -> Result<(), TensorAllocatorError> {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+
+        #[derive(Clone)]
+        struct TestParentDeallocator {
+            was_called: Arc<AtomicBool>,
+        }
+
+        impl ParentDeallocator for TestParentDeallocator {
+            fn dealloc(&self) {
+                self.was_called.store(true, Ordering::SeqCst);
+            }
+        }
+
+        let was_called = Arc::new(AtomicBool::new(false));
+        let parent_deallocator = Arc::new(TestParentDeallocator {
+            was_called: Arc::clone(&was_called),
+        });
+
+        let data: [i32; 4] = [1, 2, 3, 4];
+        let data_ptr = data.as_ptr();
+        let data_len = data.len() * std::mem::size_of::<i32>();
+
+        // Create a scope to ensure the buffer is dropped
+        {
+            let buffer = unsafe {
+                TensorStorage::<i32, _>::from_raw_parts(
+                    data_ptr,
+                    data_len,
+                    CpuAllocator::with_parent_relation(parent_deallocator),
+                )
+            };
+
+            // Check that we can access the data correctly
+            assert_eq!(buffer.as_slice(), &[1, 2, 3, 4]);
+            assert_eq!(buffer.as_ptr(), data_ptr);
+
+            // Parent deallocator should not be called yet
+            assert_eq!(was_called.load(Ordering::SeqCst), false);
+
+            // Let the buffer go out of scope here
+        }
+
+        // Now that the buffer has been dropped, our parent deallocator should have been called
+        assert_eq!(was_called.load(Ordering::SeqCst), true);
+
         Ok(())
     }
 }
