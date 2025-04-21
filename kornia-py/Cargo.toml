@@ -17,6 +17,7 @@ crate-type = ["cdylib"]
 [dependencies]
 
 # kornia
+kornia-tensor = { path = "../crates/kornia-tensor" }
 kornia-image = { path = "../crates/kornia-image" }
 kornia-imgproc = { path = "../crates/kornia-imgproc" }
 kornia-io = { path = "../crates/kornia-io", features = ["turbojpeg"] }

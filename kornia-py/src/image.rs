@@ -1,7 +1,76 @@
-use numpy::{PyArray, PyArray3, PyArrayMethods, PyUntypedArrayMethods};
+use std::sync::Arc;
 
 use kornia_image::{Image, ImageError, ImageSize};
+use kornia_tensor::CpuAllocator;
+use kornia_tensor::ParentDeallocator;
+use kornia_tensor::Tensor;
+use numpy::ndarray::RawArrayViewMut;
+use numpy::PyUntypedArrayMethods;
+use numpy::{Element, PyArray, PyArray3, PyArrayMethods};
 use pyo3::prelude::*;
+
+pub trait ImageNumpy<T: Element> {
+    type NumpyOutput;
+
+    fn new_numpy(image_size: ImageSize) -> (Py<PyArray3<T>>, Self::NumpyOutput);
+
+    fn from_numpy(pyarray: Py<PyArray3<T>>) -> Self::NumpyOutput;
+
+    fn from_numpy_raw_view(raw_array: RawArrayViewMut<T, numpy::Ix3>) -> Self::NumpyOutput;
+}
+
+impl<T: Element + Clone + 'static, const C: usize> ImageNumpy<T> for Image<T, C> {
+    type NumpyOutput = Result<Self, ImageError>;
+
+    fn new_numpy(image_size: ImageSize) -> (Py<PyArray3<T>>, Self::NumpyOutput) {
+        Python::with_gil(|py| unsafe {
+            let array =
+                PyArray::<T, numpy::Ix3>::new(py, [image_size.height, image_size.width, C], false);
+            let raw_array = array.as_raw_array_mut();
+            let image = Self::from_numpy_raw_view(raw_array);
+
+            let array = array.unbind();
+
+            (array, image)
+        })
+    }
+
+    fn from_numpy(pyarray: Py<PyArray3<T>>) -> Self::NumpyOutput {
+        Python::with_gil(|py| {
+            let array = pyarray.bind(py);
+            let array_view = array.as_raw_array_mut();
+
+            let image = Self::from_numpy_raw_view(array_view);
+            image
+        })
+    }
+
+    fn from_numpy_raw_view(mut raw_array: RawArrayViewMut<T, numpy::Ix3>) -> Self::NumpyOutput {
+        let data_ptr = raw_array.as_mut_ptr();
+        let len = raw_array.len();
+        let dim = raw_array.dim();
+
+        let pyimage_deallocator = PyImageDeallocator;
+
+        let tensor = unsafe {
+            Tensor::from_raw_parts(
+                [dim.0, dim.1, dim.2],
+                data_ptr,
+                len,
+                CpuAllocator::with_parent_relation(Arc::new(pyimage_deallocator)),
+            )
+        }?;
+
+        Ok(Image(tensor))
+    }
+}
+
+#[repr(transparent)]
+pub struct PyImageDeallocator;
+
+impl ParentDeallocator for PyImageDeallocator {
+    fn dealloc(&self) {}
+}
 
 // type alias for a 3D numpy array of u8
 pub type PyImage = Py<PyArray3<u8>>;
